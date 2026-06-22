@@ -1,5 +1,7 @@
 **This python package is unofficial and is not related in any way to Lidl. It was developed by reversed engineered requests and can stop working at anytime!**
 
+> **Fork notice.** This is a fork of [Andre0512/lidl-plus](https://github.com/Andre0512/lidl-plus) with fixes for the current Lidl Plus API and added scripts to bulk-download every receipt on your account and render them as JPG/PDF invoices that look like the ones the app shows. See [Fork additions](#fork-additions) below.
+
 # Python Lidl Plus API
 [![GitHub Workflow Status](https://img.shields.io/github/actions/workflow/status/Andre0512/lidl-plus/python-check.yml?branch=main&label=checks)](https://github.com/Andre0512/lidl-plus/actions/workflows/python-check.yml)
 [![PyPI - Status](https://img.shields.io/pypi/status/lidl-plus)](https://pypi.org/project/lidl-plus)
@@ -189,3 +191,91 @@ If you find this project helpful and would like to support its development, you 
 [!["Buy Me A Coffee"](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://www.buymeacoffee.com/andre0512)
 
 Don't forget to star the repository if you found it useful! ⭐
+
+---
+
+## Fork additions
+
+This fork adds a small toolchain on top of the library for the common case of
+"give me every receipt my Lidl Plus account has, as a folder of invoice
+images". It also patches a few things in the upstream library that broke
+against the current Lidl backend.
+
+### What was fixed
+
+The upstream package (v0.3.x) currently fails against the live API for two
+reasons. Both are worked around in `fetch.py` via runtime monkey-patches, so
+no fork of the library code itself is needed:
+
+* **`App-Version` header.** The library sends `App-Version: 999.99.9`, which
+  the server now rejects with HTTP 426 / empty body. A realistic value
+  (e.g. `15.30.0`) is accepted. `fetch.py` overrides the header before any
+  request is made.
+* **Single-ticket endpoint.** `LidlPlusApi.ticket(id)` calls `/api/v2/<CC>/tickets/<id>`,
+  which now returns `405 Method Not Allowed`. The working endpoint is
+  `/api/v3/<CC>/tickets/<id>`. `fetch.py` calls v3 directly.
+* **Read timeouts.** The default 10 s timeout is too short for the tickets
+  list on large accounts. `fetch.py` bumps it to 60 s and wraps every call in
+  an exponential-backoff retry (2 s → 32 s, up to 5 attempts).
+
+Authentication is also handled outside the library, because Lidl's login page
+now serves reCAPTCHA and the bundled Selenium flow no longer completes.
+
+### What it does
+
+Four standalone scripts at the repo root:
+
+| Script | What it does |
+|---|---|
+| `auth_manual.py` | One-time OAuth login per country. Prints a URL you open in your normal browser; you log in (solve reCAPTCHA there), copy the failed `com.lidlplus.app://callback?...` URL back, and the script exchanges the `code` for a refresh token saved to `data/token_<CC>.txt`. |
+| `fetch.py` | Uses the saved refresh token to list every ticket on the account and download its full detail JSON. Writes `data/receipts_<CC>.json`. |
+| `render.py` | Renders each saved receipt to a JPG (or PDF) using headless Chromium (Playwright). Inlines the Lidl logo and regenerates the fiscal QR code and ITF return-info barcode locally, so the output looks like the in-app receipt. Writes `data/images_<CC>/<ticket_id>.jpg`. There is **no** Lidl endpoint that returns receipt images — the app itself renders the `htmlPrintedReceipt` field client-side, and this script does the same thing offline. |
+| `search.py` | Regex search across all saved receipts by line-item description. |
+
+Each Lidl Plus account is bound to one country, so you run the auth + fetch
+flow once per country (e.g. `HR` and `SI`).
+
+### Usage
+
+```bash
+# 1. clone + venv
+git clone https://github.com/johnny2211/lidl-plus.git
+cd lidl-plus
+python3 -m venv .venv
+source .venv/bin/activate
+
+# 2. install the library and the extras the fork scripts need
+pip install "lidl-plus[auth]" playwright "qrcode[pil]" python-barcode
+playwright install chromium
+
+# 3. one-time login per country (opens a URL you paste into your browser)
+python auth_manual.py -c HR -l hr
+python auth_manual.py -c SI -l sl
+
+# 4. download every receipt for that country
+python fetch.py -c HR -l hr     # → data/receipts_HR.json
+python fetch.py -c SI -l sl     # → data/receipts_SI.json
+
+# 5. render every receipt as a JPG invoice
+python render.py -c HR          # → data/images_HR/<id>.jpg
+python render.py -c SI          # → data/images_SI/<id>.jpg
+#   --format pdf  for PDFs
+#   -q 75         for smaller JPGs
+#   -n 5          render only the first 5 (smoke test)
+
+# 6. search across saved receipts
+python search.py "mlijeko"      # case-insensitive regex, all countries
+```
+
+Everything under `data/` is gitignored — tokens, JSONs, and rendered invoices
+stay on your machine.
+
+### Caveats
+
+* The login URL produced by `auth_manual.py` is single-use; if you don't
+  finish the paste-back step you need to re-run it.
+* Refresh tokens rotate. If `fetch.py` starts returning 401, just run
+  `auth_manual.py` again for that country.
+* Rendered receipts pull the Lidl logo from the Lidl CDN at render time. If
+  you want fully offline images, swap the `<img class="logo">` in
+  `render.py` for a one-time download + inline.
