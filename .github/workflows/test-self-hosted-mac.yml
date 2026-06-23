@@ -1,0 +1,22 @@
+name: Test self-hosted Mac runner
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: [self-hosted, macOS, local]
+
+    steps:
+      - name: Check machine
+        run: |
+          sw_vers
+          uname -m
+          whoami
+          pwd
+
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: List files
+        run: ls -la
