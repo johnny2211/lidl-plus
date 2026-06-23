@@ -5,18 +5,14 @@ on:
 
 jobs:
   test:
-    runs-on: [self-hosted, macOS, local]
+    runs-on: [self-hosted, macOS, X64]
 
     steps:
-      - name: Check machine
+      - name: Machine info
         run: |
+          echo "Runner name: $RUNNER_NAME"
+          echo "Runner OS: $RUNNER_OS"
+          echo "Runner arch: $RUNNER_ARCH"
           sw_vers
           uname -m
           whoami
-          pwd
-
-      - name: Checkout repo
-        uses: actions/checkout@v4
-
-      - name: List files
-        run: ls -la
